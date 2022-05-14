@@ -318,7 +318,7 @@ func main() {
 	output_dir := "/home/chris/Documents/images/output/"
 
 	chunk_size := 10
-	num_images := 1000
+	num_images := 100
 	n_buffered_images := 100
 	n_buffered_chunks := 1000000
 
@@ -363,5 +363,6 @@ func main() {
 	av_time_f := float64(av_time) / float64(loops)
 
 	log.Println("average time (ms): ", av_time_f)
+	log.Println("over this many loops: ", loops)
 
 }
