@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 type Chunk struct {
@@ -38,7 +37,12 @@ func readImagesFileinfo(image_dir string, file_names chan string, num_images int
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func(f *os.File) {
+		err := f.Close()
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}(f)
 
 	files, err := f.Readdir(0)
 	if err != nil {
@@ -177,14 +181,23 @@ func writeDoneImages(output_dir string, output_ldimgs chan *ProcessedImage, done
 			}
 
 			if success {
-				png.Encode(f, img_out)
-				f.Close()
+				err := png.Encode(f, img_out)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				err = f.Close()
+				if err != nil {
+					log.Fatalln(err)
+				}
 				done <- 1
 			} else {
-				log.Fatalln("write done ERROR")
-
-				f.Close()
+				err = f.Close()
+				if err != nil {
+					log.Fatalln(err)
+				}
 				done <- 1
+
+				log.Fatalln("write done ERROR")
 			}
 
 		case <-control:
@@ -192,22 +205,35 @@ func writeDoneImages(output_dir string, output_ldimgs chan *ProcessedImage, done
 			return
 		}
 	}
-
 }
 
+// Pixelate
+// image_dir: an input directory of images from which to read
+// num_images: a number of input images to process and write
+// chunk_size: region size of pixels to average, defining a square with sides of size chunk_size tiled from the top-left
+// output_dir: an output directory, into which we write the processed images
 func Pixelate(
-	output_ldimgs chan *ProcessedImage,
-	done, control chan int,
-	file_names chan string,
-	numProcessors, numImgWriters, num_images int,
-	image_dir, output_dir string,
-	chunk_size int) int64 {
+	image_dir string,
+	num_images int,
+	chunk_size int,
+	output_dir string,
+) {
+	log.Println("pixelate two parts")
 
+	n_buffered_images := 10
+	numProcessors := 100
+	numImgWriters := 10
 	numWorkers := numProcessors + numImgWriters
+
+	file_names := make(chan string, num_images)
+	control := make(chan int, numProcessors+numImgWriters)
+	done := make(chan int, num_images)
+	output_ldimgs := make(chan *ProcessedImage, n_buffered_images)
+
 	wg := new(sync.WaitGroup)
 	wg.Add(numWorkers)
 
-	start := time.Now()
+	readImagesFileinfo(image_dir, file_names, num_images)
 
 	for i := 0; i < numProcessors; i++ {
 		go processImages(image_dir, file_names, control, chunk_size, output_ldimgs, wg)
@@ -229,52 +255,4 @@ func Pixelate(
 		control <- 1
 	}
 	wg.Wait()
-
-	return time.Since(start).Milliseconds()
-}
-
-func main() {
-
-	image_dir := "/home/chris/Documents/images/facenet/"
-	output_dir := "/home/chris/Documents/images/output/"
-
-	chunk_size := 10
-	num_images := 1000
-	n_buffered_images := 10
-	n_buffered_chunks := 1000000
-
-	numProcessors := 100
-	numImgWriters := 10
-
-	control := make(chan int, numProcessors+numImgWriters)
-	done := make(chan int, num_images)
-	file_names := make(chan string, num_images)
-	output_ldimgs := make(chan *ProcessedImage, n_buffered_images)
-
-	log.Println("input images:", num_images)
-	log.Println("n_buffered_images, n_buffered_chunks:", n_buffered_images, n_buffered_chunks)
-	log.Println("numProcessors, numImgWriters:", numProcessors, numImgWriters)
-
-	var av_time int64 = 0
-	loops := 30
-	for i := 0; i < loops; i++ {
-
-		// put filenames in the file_names channel
-		readImagesFileinfo(image_dir, file_names, num_images)
-
-		// Pixelate main code with timing
-		elapsed := Pixelate(
-			output_ldimgs,
-			done, control,
-			file_names,
-			numProcessors, numImgWriters, num_images,
-			image_dir, output_dir,
-			chunk_size)
-
-		av_time += elapsed
-	}
-	av_time_f := float64(av_time) / float64(loops)
-
-	log.Println("average time (ms): ", av_time_f)
-
 }

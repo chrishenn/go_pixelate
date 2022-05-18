@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 type Chunk struct {
@@ -261,24 +260,39 @@ func writeDoneImages(output_dir string, output_channels chan *ChanWrapper, done 
 
 }
 
-func timeTrack(start time.Time, name string) int64 {
-	elapsed := time.Since(start)
-	log.Printf("%s took %s", name, elapsed)
+// Pixelate
+// image_dir: an input directory of images from which to read
+// num_images: a number of input images to process and write
+// chunk_size: region size of pixels to average, defining a square with sides of size chunk_size tiled from the top-left
+// output_dir: an output directory, into which we write the processed images
+func Pixelate(
+	image_dir string,
+	num_images int,
+	chunk_size int,
+	output_dir string,
+) {
+	log.Println("pixelate four parts")
 
-	return elapsed.Milliseconds()
-}
+	n_buffered_images := 100
+	n_buffered_chunks := 1000000
 
-func pixelate(loadedImages chan *LoadedImage, imgChunks chan *Chunk, output_channels chan *ChanWrapper,
-	done, control chan int,
-	file_names chan string,
-	numLoaders, numChunkers, numChunkCrunchers, numImgWriters, numWorkers, num_images int,
-	image_dir, output_dir string,
-	chunk_size int) int64 {
+	numLoaders := 58
+	numChunkers := 58
+	numChunkCrunchers := 58
+	numImgWriters := 58
+	numWorkers := numLoaders + numChunkers + numChunkCrunchers + numImgWriters
 
-	start := time.Now()
+	control := make(chan int, numWorkers)
+	done := make(chan int, num_images)
+	file_names := make(chan string, num_images)
+	loadedImages := make(chan *LoadedImage, n_buffered_images)
+	output_channels := make(chan *ChanWrapper, n_buffered_images)
+	imgChunks := make(chan *Chunk, n_buffered_chunks)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(numWorkers)
+
+	readImagesFileinfo(image_dir, file_names, num_images)
 
 	for i := 0; i < numLoaders; i++ {
 		go loadImageFiles(image_dir, file_names, loadedImages, control, wg)
@@ -308,61 +322,4 @@ func pixelate(loadedImages chan *LoadedImage, imgChunks chan *Chunk, output_chan
 		control <- 1
 	}
 	wg.Wait()
-
-	return time.Since(start).Milliseconds()
-}
-
-func main() {
-
-	image_dir := "/home/chris/Documents/images/facenet/"
-	output_dir := "/home/chris/Documents/images/output/"
-
-	chunk_size := 10
-	num_images := 100
-	n_buffered_images := 100
-	n_buffered_chunks := 1000000
-
-	numLoaders := 58
-	numChunkers := 58
-	numChunkCrunchers := 58
-	numImgWriters := 58
-	numWorkers := numLoaders + numChunkers + numChunkCrunchers + numImgWriters
-
-	control := make(chan int, numWorkers)
-	done := make(chan int, num_images)
-
-	file_names := make(chan string, num_images)
-
-	loadedImages := make(chan *LoadedImage, n_buffered_images)
-	output_channels := make(chan *ChanWrapper, n_buffered_images)
-
-	imgChunks := make(chan *Chunk, n_buffered_chunks)
-
-	log.Println("using", num_images, "input images")
-	log.Println("n_buffered_images, n_buffered_chunks", n_buffered_images, n_buffered_chunks)
-	log.Println(numLoaders, numChunkers, numChunkCrunchers, numImgWriters)
-
-	var av_time int64 = 0
-	loops := 30
-	for i := 0; i < loops; i++ {
-
-		// put filenames in the file_names channel
-		readImagesFileinfo(image_dir, file_names, num_images)
-
-		// run main code with timing
-		elapsed := pixelate(
-			loadedImages, imgChunks, output_channels,
-			done, control,
-			file_names,
-			numLoaders, numChunkers, numChunkCrunchers, numImgWriters, numWorkers, num_images,
-			image_dir, output_dir,
-			chunk_size)
-
-		av_time += elapsed
-	}
-	av_time_f := float64(av_time) / float64(loops)
-
-	log.Println("average time (ms): ", av_time_f)
-	log.Println("over this many loops: ", loops)
-
 }

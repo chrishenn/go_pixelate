@@ -4,6 +4,8 @@ import (
 	"log"
 	"testing"
 	"time"
+
+	"github.com/sebdah/goldie/v2"
 )
 
 func TestPixelateTiming(t *testing.T) {
@@ -30,4 +32,11 @@ func TestPixelateTiming(t *testing.T) {
 	}
 	av_time_f := float64(av_time) / float64(loops)
 	log.Println("average time (ms): ", av_time_f)
+}
+
+func TestExample(t *testing.T) {
+	output := "example_golden_output"
+
+	g := goldie.New(t)
+	g.Assert(t, "example", []byte(output))
 }
