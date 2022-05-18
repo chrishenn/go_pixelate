@@ -1,4 +1,4 @@
-package main
+package pixelate
 
 import (
 	"image"
@@ -195,7 +195,7 @@ func writeDoneImages(output_dir string, output_ldimgs chan *ProcessedImage, done
 
 }
 
-func run(
+func Pixelate(
 	output_ldimgs chan *ProcessedImage,
 	done, control chan int,
 	file_names chan string,
@@ -240,19 +240,20 @@ func main() {
 
 	chunk_size := 10
 	num_images := 1000
-	n_buffered_images := 200
+	n_buffered_images := 10
 	n_buffered_chunks := 1000000
 
-	numProcessors := 128
-	numImgWriters := 128
+	numProcessors := 100
+	numImgWriters := 10
 
 	control := make(chan int, numProcessors+numImgWriters)
 	done := make(chan int, num_images)
 	file_names := make(chan string, num_images)
 	output_ldimgs := make(chan *ProcessedImage, n_buffered_images)
 
-	log.Println("using", num_images, "input images")
-	log.Println("n_buffered_images, n_buffered_chunks", n_buffered_images, n_buffered_chunks)
+	log.Println("input images:", num_images)
+	log.Println("n_buffered_images, n_buffered_chunks:", n_buffered_images, n_buffered_chunks)
+	log.Println("numProcessors, numImgWriters:", numProcessors, numImgWriters)
 
 	var av_time int64 = 0
 	loops := 30
@@ -261,8 +262,8 @@ func main() {
 		// put filenames in the file_names channel
 		readImagesFileinfo(image_dir, file_names, num_images)
 
-		// run main code with timing
-		elapsed := run(
+		// Pixelate main code with timing
+		elapsed := Pixelate(
 			output_ldimgs,
 			done, control,
 			file_names,
@@ -275,6 +276,5 @@ func main() {
 	av_time_f := float64(av_time) / float64(loops)
 
 	log.Println("average time (ms): ", av_time_f)
-	log.Println("over this many loops: ", loops)
 
 }

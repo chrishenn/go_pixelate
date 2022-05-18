@@ -1,4 +1,4 @@
-package old
+package pixelate
 
 import (
 	"image"
@@ -268,7 +268,7 @@ func timeTrack(start time.Time, name string) int64 {
 	return elapsed.Milliseconds()
 }
 
-func LoadChunkCrunchWrite(loadedImages chan *LoadedImage, imgChunks chan *Chunk, output_channels chan *ChanWrapper,
+func pixelate(loadedImages chan *LoadedImage, imgChunks chan *Chunk, output_channels chan *ChanWrapper,
 	done, control chan int,
 	file_names chan string,
 	numLoaders, numChunkers, numChunkCrunchers, numImgWriters, numWorkers, num_images int,
@@ -350,7 +350,7 @@ func main() {
 		readImagesFileinfo(image_dir, file_names, num_images)
 
 		// run main code with timing
-		elapsed := LoadChunkCrunchWrite(
+		elapsed := pixelate(
 			loadedImages, imgChunks, output_channels,
 			done, control,
 			file_names,
