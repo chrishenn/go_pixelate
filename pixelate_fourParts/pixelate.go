@@ -4,17 +4,15 @@ import (
 	"image"
 	"image/color"
 	_ "image/jpeg"
-	"image/png"
 	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
 type Chunk struct {
 	img             *image.Image
-	img_chunks_out  chan *Chunk
+	done_img_chunks *chan *Chunk
 	processed_color *color.RGBA
 
 	img_ht int
@@ -27,10 +25,9 @@ type Chunk struct {
 	chunk_size    int
 }
 
-type LoadedImage struct {
-	img          *image.Image
-	img_filepath string
-	img_filename string
+type WorkingImage struct {
+	img             *image.Image
+	done_img_chunks *chan *Chunk
 
 	n_img_chunks int
 
@@ -38,100 +35,56 @@ type LoadedImage struct {
 	img_wt int
 }
 
-type ChanWrapper struct {
-	channel *chan *Chunk
-	ldimg   *LoadedImage
-}
+func loadImageFiles(input_filepaths chan string, loadedImages chan *WorkingImage, control chan int, wg *sync.WaitGroup) {
 
-func readImagesFileinfo(image_dir string, file_names chan string, num_images int) {
+	for file_path := range input_filepaths {
 
-	f, err := os.Open(image_dir)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	defer f.Close()
-
-	files, err := f.Readdir(0)
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	for i, fileinfo := range files {
-		if i == num_images {
-			break
+		file, err := os.Open(file_path)
+		if err != nil {
+			log.Fatalln(err)
 		}
 
-		file_names <- fileinfo.Name()
+		img, _, err := image.Decode(file)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		loadedImages <- &WorkingImage{img: &img}
+
+		file.Close()
 	}
+	wg.Done()
 }
 
-func loadImageFiles(image_dir string, file_names chan string, loadedImages chan *LoadedImage, control chan int, wg *sync.WaitGroup) {
+func chunkImage(imgChunks chan *Chunk, loadedImages chan *WorkingImage, workingImages chan *WorkingImage, chunk_size int, control chan int, wg *sync.WaitGroup) {
 
 	for {
+
 		select {
 
-		case filename := <-file_names:
+		case working_img := <-loadedImages:
 
-			filepath := filepath.Join(image_dir, filename)
-
-			file, err := os.Open(filepath)
-			if err != nil {
-				log.Fatalln(err)
-			}
-
-			img, _, err := image.Decode(file)
-			if err != nil {
-				log.Fatalln(err)
-			}
-
-			imgBounds := img.Bounds()
+			imgBounds := (*working_img.img).Bounds()
 			img_ht := imgBounds.Max.Y
 			img_wt := imgBounds.Max.X
-
-			loadedImages <- &LoadedImage{img: &img, img_filepath: filepath, img_filename: filename, img_ht: img_ht, img_wt: img_wt}
-
-			file.Close()
-
-		case <-control:
-			wg.Done()
-			return
-		}
-	}
-}
-
-func chunkImage(imgChunks chan *Chunk, output_channels chan *ChanWrapper, loadedImages chan *LoadedImage, chunk_size int, control chan int, wg *sync.WaitGroup) {
-
-	for {
-
-		select {
-
-		case ldimg := <-loadedImages:
-
-			img_ht := ldimg.img_ht
-			img_wt := ldimg.img_wt
-
 			n_img_chunks := (((img_ht - 1) / chunk_size) + 1) * (((img_wt - 1) / chunk_size) + 1)
-			ldimg.n_img_chunks = n_img_chunks
 
 			// channel onto which processed chunks for THIS IMAGE will be put
 			img_chunks_out := make(chan *Chunk, n_img_chunks)
 
-			// the output channel for this image goes into the channel of output channels, with image data
-			output_channels <- &ChanWrapper{channel: &img_chunks_out, ldimg: ldimg}
+			working_img.n_img_chunks = n_img_chunks
+			working_img.img_ht = img_ht
+			working_img.img_wt = img_wt
+			working_img.done_img_chunks = &img_chunks_out
 
-			chunks_written := 0
+			// the output for this image
+			workingImages <- working_img
+
 			for start_y := 0; start_y < img_ht; start_y += chunk_size {
 				for start_x := 0; start_x < img_wt; start_x += chunk_size {
 
-					imgChunks <- &Chunk{img: ldimg.img, img_chunks_out: img_chunks_out, img_ht: img_ht, img_wt: img_wt, chunk_start_x: start_x, chunk_start_y: start_y, chunk_size: chunk_size}
-					// log.Println("created chunk: ", start_y, start_x, n_img_chunks, chunks_written)
-					chunks_written++
+					imgChunks <- &Chunk{img: working_img.img, done_img_chunks: &img_chunks_out, img_ht: img_ht, img_wt: img_wt, chunk_start_x: start_x, chunk_start_y: start_y, chunk_size: chunk_size}
 				}
-			}
-
-			// log.Println("wrote:", chunks_written, "chunks, and n_chunks_todo was: ", n_img_chunks)
-			if chunks_written != n_img_chunks {
-				log.Fatalln("wrote ", chunks_written, " and n_chunks_todo was: ", n_img_chunks)
 			}
 
 		case <-control:
@@ -156,14 +109,14 @@ func crunchChunks(imgChunks chan *Chunk, control chan int, wg *sync.WaitGroup) {
 
 			var end_y, end_x int
 			if end_y = chunk.chunk_start_y + chunk.chunk_size; end_y >= chunk.img_ht {
-				end_y = chunk.img_ht - 1
+				end_y = chunk.img_ht
 			}
 			if end_x = chunk.chunk_start_x + chunk.chunk_size; end_x >= chunk.img_wt {
-				end_x = chunk.img_wt - 1
+				end_x = chunk.img_wt
 			}
 
-			chunk.chunk_end_x = end_x
 			chunk.chunk_end_y = end_y
+			chunk.chunk_end_x = end_x
 
 			// read pixel values and compute average for this region
 			num_sum := float64((end_y - start_y) * (end_x - start_x))
@@ -187,7 +140,7 @@ func crunchChunks(imgChunks chan *Chunk, control chan int, wg *sync.WaitGroup) {
 			a_av := uint8(math.Round(a_sum / num_sum))
 
 			chunk.processed_color = &color.RGBA{r_av, g_av, b_av, a_av}
-			chunk.img_chunks_out <- chunk
+			*chunk.done_img_chunks <- chunk
 
 		case <-control:
 			wg.Done()
@@ -197,31 +150,24 @@ func crunchChunks(imgChunks chan *Chunk, control chan int, wg *sync.WaitGroup) {
 
 }
 
-func writeDoneImages(output_dir string, output_channels chan *ChanWrapper, done chan int, control chan int, wg *sync.WaitGroup) {
+func assembleDoneImages(done_images chan *image.RGBA, working_images chan *WorkingImage, done chan int, control chan int, wg *sync.WaitGroup) {
 
 	for {
 		select {
-		case chanwrap := <-output_channels:
+		case working_image := <-working_images:
 
-			// outchan is a channel of pointers to processed chunks for a given image
-			outchan := chanwrap.channel
+			// done_img_chunks is a channel of pointers to processed chunks for a given image
+			done_img_chunks := *working_image.done_img_chunks
 
-			new_filepath := filepath.Join(output_dir, chanwrap.ldimg.img_filename+"_proc.png")
-			img_ht := chanwrap.ldimg.img_ht
-			img_wt := chanwrap.ldimg.img_wt
-
-			n_img_chunks := chanwrap.ldimg.n_img_chunks
-			n_chunks_consumed := 0
+			img_ht := working_image.img_ht
+			img_wt := working_image.img_wt
+			n_img_chunks := working_image.n_img_chunks
 
 			img_out := image.NewRGBA(image.Rect(0, 0, img_wt, img_ht))
-			f, err := os.Create(new_filepath)
-			if err != nil {
-				log.Fatalln(err)
-			}
 
-			success := false
+			n_chunks_consumed := 0
 			for {
-				chunk := <-*outchan
+				chunk := <-done_img_chunks
 
 				for y := chunk.chunk_start_y; y < chunk.chunk_end_y; y++ {
 					for x := chunk.chunk_start_x; x < chunk.chunk_end_x; x++ {
@@ -232,24 +178,10 @@ func writeDoneImages(output_dir string, output_channels chan *ChanWrapper, done 
 				// check image chunks are all consumed; image done
 				n_chunks_consumed++
 				if n_chunks_consumed == n_img_chunks {
-					// log.Println("all chunks for img consumed")
-					success = true
+					done_images <- img_out
+					done <- 1
 					break
 				}
-			}
-
-			if success {
-				// log.Println("write done success")
-				// log.Println("wrote file to: ", new_filepath)
-
-				png.Encode(f, img_out)
-				f.Close()
-				done <- 1
-			} else {
-				log.Fatalln("write done ERROR")
-
-				f.Close()
-				done <- 1
 			}
 
 		case <-control:
@@ -261,65 +193,75 @@ func writeDoneImages(output_dir string, output_channels chan *ChanWrapper, done 
 }
 
 // Pixelate
-// image_dir: an input directory of images from which to read
-// num_images: a number of input images to process and write
 // chunk_size: region size of pixels to average, defining a square with sides of size chunk_size tiled from the top-left
-// output_dir: an output directory, into which we write the processed images
+
 func Pixelate(
-	image_dir string,
-	num_images int,
 	chunk_size int,
-	output_dir string,
-) {
+	input_filepaths chan string,
+
+) chan *image.RGBA {
+
 	log.Println("pixelate four parts")
 
-	n_buffered_images := 100
+	n_images := len(input_filepaths)
+	close(input_filepaths)
+
+	// set buffer sizes
+	n_buffered_images := n_images
+	if n_buffered_images > 100 {
+		n_buffered_images = 100
+	}
 	n_buffered_chunks := 1000000
 
+	// set number of gophers for each task
 	numLoaders := 58
 	numChunkers := 58
 	numChunkCrunchers := 58
-	numImgWriters := 58
-	numWorkers := numLoaders + numChunkers + numChunkCrunchers + numImgWriters
+	numImgAssemblers := 58
+	numWorkers := numLoaders + numChunkers + numChunkCrunchers + numImgAssemblers
+	// numWorkers := numChunkers + numChunkCrunchers + numImgAssemblers
 
-	control := make(chan int, numWorkers)
-	done := make(chan int, num_images)
-	file_names := make(chan string, num_images)
-	loadedImages := make(chan *LoadedImage, n_buffered_images)
-	output_channels := make(chan *ChanWrapper, n_buffered_images)
+	// create channels
+	kill_signal := make(chan int, numWorkers)
+	count_images_done := make(chan int, n_images)
+	loadedImages := make(chan *WorkingImage, n_buffered_images)
+	workingImages := make(chan *WorkingImage, n_buffered_images)
 	imgChunks := make(chan *Chunk, n_buffered_chunks)
+	done_images := make(chan *image.RGBA, n_images)
 
+	// get rid of this
 	wg := new(sync.WaitGroup)
 	wg.Add(numWorkers)
 
-	readImagesFileinfo(image_dir, file_names, num_images)
-
 	for i := 0; i < numLoaders; i++ {
-		go loadImageFiles(image_dir, file_names, loadedImages, control, wg)
+		go loadImageFiles(input_filepaths, loadedImages, kill_signal, wg)
 	}
 
 	for i := 0; i < numChunkers; i++ {
-		go chunkImage(imgChunks, output_channels, loadedImages, chunk_size, control, wg)
+		go chunkImage(imgChunks, loadedImages, workingImages, chunk_size, kill_signal, wg)
 	}
 
 	for i := 0; i < numChunkCrunchers; i++ {
-		go crunchChunks(imgChunks, control, wg)
+		go crunchChunks(imgChunks, kill_signal, wg)
 	}
 
-	for i := 0; i < numImgWriters; i++ {
-		go writeDoneImages(output_dir, output_channels, done, control, wg)
+	for i := 0; i < numImgAssemblers; i++ {
+		go assembleDoneImages(done_images, workingImages, count_images_done, kill_signal, wg)
 	}
 
 	// block this main routine until all images are done
 	i := 0
-	for i = 0; i < num_images; i++ {
-		<-done
+	for i = 0; i < n_images; i++ {
+		<-count_images_done
 	}
 
-	// send signals to the control channel, to tell workers to exit
+	// send kill signals to the kill_signal channel, to tell workers to exit
 	i = 0
 	for i = 0; i < numWorkers; i++ {
-		control <- 1
+		kill_signal <- 1
 	}
 	wg.Wait()
+
+	close(done_images)
+	return done_images
 }
