@@ -229,7 +229,7 @@ func Pixelate(
 	imgChunks := make(chan *Chunk, n_buffered_chunks)
 	done_images := make(chan *image.RGBA, n_images)
 
-	// get rid of this
+	//
 	wg := new(sync.WaitGroup)
 	wg.Add(numWorkers)
 

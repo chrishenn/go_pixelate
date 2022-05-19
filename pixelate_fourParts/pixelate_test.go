@@ -1,11 +1,13 @@
 package pixelate
 
 import (
+	"bytes"
 	"image"
 	"image/png"
 	"log"
 	"os"
 	"path"
+	"strconv"
 	"testing"
 	"time"
 
@@ -54,6 +56,44 @@ func writeDoneImages(output_dir string, done_images chan *image.RGBA) {
 }
 
 // Tests
+func TestCompareGoldenPixelatedImages(t *testing.T) {
+
+	num_images := 1
+
+	for chunk_size := 10; chunk_size < 60; chunk_size += 10 {
+
+		tests := map[string]struct {
+			input  string
+			golden string
+		}{
+			"Aaron_Eckhart_0001": {input: "/home/chris/Documents/go_pixelate/pixelate_fourParts/testdata/Aaron_Eckhart_0001.png", golden: "Aaron_Eckhart_0001_chunksize" + strconv.Itoa(chunk_size)},
+			"Adrien_Brody_0011":  {input: "/home/chris/Documents/go_pixelate/pixelate_fourParts/testdata/Adrien_Brody_0011.png", golden: "Adrien_Brody_0011_chunksize" + strconv.Itoa(chunk_size)},
+		}
+
+		for name, tc := range tests {
+			t.Run(name, func(t *testing.T) {
+
+				g := goldie.New(t)
+
+				file_paths := make(chan string, num_images)
+				file_paths <- tc.input
+
+				done_images := Pixelate(chunk_size, file_paths)
+				if len(done_images) != 1 {
+					t.Fail()
+				}
+				done_image := <-done_images
+
+				buf := new(bytes.Buffer)
+				png.Encode(buf, done_image)
+
+				g.Assert(t, tc.golden, buf.Bytes())
+			})
+		}
+	}
+
+}
+
 func TestPixelateTiming(t *testing.T) {
 
 	chunk_size := 10
@@ -99,7 +139,7 @@ func TestGoldens(t *testing.T) {
 	}
 }
 
-func TestExample(t *testing.T) {
+func TestReadWriteHelpersE2E(t *testing.T) {
 
 	chunk_size := 10
 	num_images := 10
