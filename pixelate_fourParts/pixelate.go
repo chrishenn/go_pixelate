@@ -194,6 +194,7 @@ func assembleDoneImages(done_images chan *image.RGBA, working_images chan *Worki
 
 // Pixelate
 // chunk_size: region size of pixels to average, defining a square with sides of size chunk_size tiled from the top-left
+// input_filepaths: a channel of strings, where each string is a filepath of an image to process
 
 func Pixelate(
 	chunk_size int,
@@ -213,13 +214,12 @@ func Pixelate(
 	}
 	n_buffered_chunks := 1000000
 
-	// set number of gophers for each task
+	// set number of goroutines for each task
 	numLoaders := 58
 	numChunkers := 58
 	numChunkCrunchers := 58
 	numImgAssemblers := 58
 	numWorkers := numLoaders + numChunkers + numChunkCrunchers + numImgAssemblers
-	// numWorkers := numChunkers + numChunkCrunchers + numImgAssemblers
 
 	// create channels
 	kill_signal := make(chan int, numWorkers)
@@ -229,10 +229,11 @@ func Pixelate(
 	imgChunks := make(chan *Chunk, n_buffered_chunks)
 	done_images := make(chan *image.RGBA, n_images)
 
-	//
+	// workgroup enables the main routine to wait for all workers to exit
 	wg := new(sync.WaitGroup)
 	wg.Add(numWorkers)
 
+	// launch workers
 	for i := 0; i < numLoaders; i++ {
 		go loadImageFiles(input_filepaths, loadedImages, kill_signal, wg)
 	}
@@ -249,7 +250,7 @@ func Pixelate(
 		go assembleDoneImages(done_images, workingImages, count_images_done, kill_signal, wg)
 	}
 
-	// block this main routine until all images are done
+	// block this main routine until all n_images are done
 	i := 0
 	for i = 0; i < n_images; i++ {
 		<-count_images_done
